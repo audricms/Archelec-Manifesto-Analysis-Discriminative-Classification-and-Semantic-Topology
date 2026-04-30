@@ -4,8 +4,7 @@ import pandas as pd
 import spacy
 from typing import List, Set
 from pathlib import Path
-
-# --- Label Engineering ---
+from tqdm import tqdm
 
 
 def map_political_blocs_temporal(row: pd.Series) -> str:
@@ -16,7 +15,7 @@ def map_political_blocs_temporal(row: pd.Series) -> str:
     if pd.isna(label) or label == "non mentionné":
         return "UNKNOWN"
 
-    # Left and Far-Right (Stable across 1981-1993)
+    # Left and Far-Right
     if "communiste français" in label:
         return "LEFT_PCF"
     if "front national" in label:
@@ -35,7 +34,7 @@ def map_political_blocs_temporal(row: pd.Series) -> str:
     is_udf = "union pour la démocratie française" in label
 
     if is_rpr and is_udf:
-        # Explicit alliances (Fixed: comparing int to int)
+        # Explicit alliances
         if year == 1981:
             return "RIGHT_UNM"
         if year == 1988:
@@ -56,13 +55,9 @@ def load_and_filter_metadata(metadata_path: Path) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"])
     df["target_label"] = df.apply(map_political_blocs_temporal, axis=1)
 
-    # Filter out UNKNOWN/OTHER and restrict to legislative elections
     main_parties = df[~df["target_label"].str.contains("UNKNOWN|OTHER")].copy()
     main_parties = main_parties[main_parties["contexte-election"] == "législatives"]
     return main_parties
-
-
-# --- NLP Preprocessing Infrastructure ---
 
 
 def strip_accents(text: str) -> str:
@@ -114,9 +109,6 @@ def build_gazetteer(file_paths: List[Path]) -> Set[str]:
                 gazetteer.add(token)
 
     return gazetteer
-
-
-# --- Object-Oriented Preprocessor ---
 
 
 class ArchelecPreprocessor:
@@ -281,3 +273,59 @@ class ArchelecPreprocessor:
             sanitized_tokens.append(lemma_norm)
 
         return " ".join(sanitized_tokens)
+
+
+def run_preprocessing():
+    """Runs the NLP pipeline on extracted text and saves the final dataframe."""
+    print("\n--- Starting NLP Preprocessing Pipeline ---")
+
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    DATA_DIR = PROJECT_ROOT / "data"
+    MANIFESTOS_DIR = DATA_DIR / "manifestos"
+    GAZETTEERS_DIR = DATA_DIR / "gazetteers"
+    PROCESSED_DIR = DATA_DIR / "processed"
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+    metadata_path = MANIFESTOS_DIR / "metadata.csv"
+    if not metadata_path.exists():
+        raise FileNotFoundError(
+            f"Metadata not found at {metadata_path}. Run extraction first."
+        )
+
+    print("Loading and filtering metadata...")
+    df_clean = load_and_filter_metadata(metadata_path)
+
+    insee_files = [
+        GAZETTEERS_DIR / "v_arrondissement_2025.csv",
+        GAZETTEERS_DIR / "v_commune_2025.csv",
+        GAZETTEERS_DIR / "v_commune_comer_2025.csv",
+        GAZETTEERS_DIR / "v_departement_2025.csv",
+        GAZETTEERS_DIR / "v_region_2025.csv",
+        GAZETTEERS_DIR / "v_comer_2025.csv",
+    ]
+    preprocessor = ArchelecPreprocessor(insee_files)
+
+    print("\nReading and cleaning manifesto texts...")
+    cleaned_texts = []
+    valid_indices = []
+
+    for doc_id, row in tqdm(
+        df_clean.iterrows(), total=len(df_clean), desc="Processing Documents"
+    ):
+        year = str(row["date"].year)
+        file_path = MANIFESTOS_DIR / year / "legislatives" / f"{doc_id}.txt"
+
+        if file_path.exists():
+            with open(file_path, "r", encoding="utf-8") as f:
+                raw_text = f.read()
+            cleaned_texts.append(preprocessor.clean_text(raw_text))
+            valid_indices.append(doc_id)
+        else:
+            continue
+
+    df_final = df_clean.loc[valid_indices].copy()
+    df_final["cleaned_text"] = cleaned_texts
+
+    output_path = PROCESSED_DIR / "cleaned_manifestos.csv"
+    df_final.to_csv(output_path, index=True)
+    print(f"\nPipeline complete! Cleaned dataset saved to {output_path}")

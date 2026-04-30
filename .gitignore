@@ -1,4 +1,4 @@
-*# ==========================================
+# ==========================================
 # 1. Project Specific Data & Heavy Files
 # ==========================================
 # Ignore all hydrated data, gazetteers, and manifestos
@@ -54,3 +54,28 @@ Desktop.ini
 .idea/
 *.swp
 *.swo
+
+# ==========================================
+# 6. Machine Learning Models & Checkpoints
+# ==========================================
+# The main models directory
+models/
+
+# Scikit-Learn / Classical ML models
+*.joblib
+*.pkl
+
+# Deep Learning weights (PyTorch, HuggingFace, etc.)
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.h5
+*.onnx
+
+# Training logs & Deep Learning cache
+runs/
+lightning_logs/
+wandb/
+.cache/
