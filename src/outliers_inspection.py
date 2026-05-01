@@ -78,17 +78,6 @@ def analyze_document_subset(
         y_pred = svm_model.predict(vectorized_text)[0]
         y_true = doc["target_label"]
 
-        # Extract source text for contextual proof
-        year = str(doc.get("date", "XXXX"))[:4]
-        source_txt_path = (
-            DATA_DIR / "manifestos" / year / "legislatives" / f"{doc_id}.txt"
-        )
-        try:
-            with open(source_txt_path, "r", encoding="utf-8") as f:
-                source_text = f.read()
-        except (FileNotFoundError, UnicodeDecodeError):
-            source_text = "[FATAL: SOURCE FILE UNREADABLE OR MISSING]"
-
         margin_status = "CORRECT" if y_true == y_pred else "MISCLASSIFIED"
 
         if oov_rate > 0.15:
@@ -136,9 +125,7 @@ def analyze_document_subset(
     return metrics_accumulator
 
 
-def generate_highlighted_topology(
-    top_10_ids: list, df_test: pd.DataFrame, lof_ledger: pd.DataFrame
-):
+def generate_highlighted_topology(top_10_ids: list, df_test: pd.DataFrame):
     """
     Projects the dataset via UMAP and visually isolates the Top 10 structural anomalies
     strictly against the test background, mapped by categorical political bloc.
@@ -168,7 +155,9 @@ def generate_highlighted_topology(
         {
             "x": test_coords_2d[:, 0],
             "y": test_coords_2d[:, 1],
-            "Political_Bloc": lof_ledger.loc[df_test.index, "target_label"],
+            "Political_Bloc": df_test[
+                "target_label"
+            ],  # FIXED: Sourced from synchronized metadata
             "Document_ID": df_test.index,
         },
         index=df_test.index,
@@ -249,6 +238,9 @@ def run_outliers_inspection():
     try:
         df_corpus = pd.read_csv(PROCESSED_DIR / "cleaned_manifestos.csv", index_col=0)
         df_test = pd.read_csv(PROCESSED_DIR / "X_test_raw.csv", index_col=0)
+
+        df_test["target_label"] = df_corpus.loc[df_test.index, "target_label"]
+
         ledger_global = pd.read_csv(
             METRICS_DIR / "camembert_lof_outlier_scores.csv", index_col=0
         )
@@ -258,10 +250,8 @@ def run_outliers_inspection():
         print(f"Fatal: Required prerequisites missing. {e}")
         sys.exit(1)
 
-    # Enforce strict Test-Set isolation to prevent transductive evaluation leakage
     lof_ledger = ledger_global[ledger_global["split"] == "test"].copy()
 
-    # Compute rank and percentile mathematically relative to N_test
     lof_ledger["Rank"] = lof_ledger["LOF_Score"].rank(ascending=False, method="min")
     lof_ledger["Percentile"] = (lof_ledger["Rank"] / len(lof_ledger)) * 100
 
@@ -289,7 +279,7 @@ def run_outliers_inspection():
     global_metrics_accumulator.extend(vis_metrics)
 
     # --- PART 2: TOP 10 STATISTICAL OUTLIERS (O_stat) ---
-    top_10_ledger = lof_ledger.sort_values(by="LOF_Score", ascending=False).head(10)
+    top_10_ledger = lof_ledger.sort_values(by="LOF_Score", ascending=False).head(35)
     top_10_ids = top_10_ledger.index.tolist()
 
     stat_metrics = analyze_document_subset(
@@ -306,7 +296,6 @@ def run_outliers_inspection():
     # --- PART 3: SERIALIZATION ---
     if global_metrics_accumulator:
         df_metrics = pd.DataFrame(global_metrics_accumulator)
-        # Drop duplicates in case a document belongs to both O_vis and O_stat
         df_metrics = df_metrics.drop_duplicates(subset=["Document_ID"])
         metrics_csv_path = METRICS_DIR / "outliers_analysis.csv"
         df_metrics.to_csv(metrics_csv_path, index=False, encoding="utf-8")
@@ -315,4 +304,8 @@ def run_outliers_inspection():
         )
 
     # --- PART 4: TOPOLOGICAL RENDERING ---
-    generate_highlighted_topology(top_10_ids, df_test, lof_ledger)
+    generate_highlighted_topology(top_10_ids[:10], df_test)
+
+
+if __name__ == "__main__":
+    run_outliers_inspection()
